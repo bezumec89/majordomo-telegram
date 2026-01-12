@@ -10,7 +10,7 @@ if ($user_id)
 if ($filter_type!='')
     $where = "where TYPE = '".$filter_type."'";
   // SEARCH RESULTS  
-  $res=SQLSelect('SELECT ID,CREATED,USER_ID,DIRECTION,TYPE,MESSAGE FROM tlg_history '.$where.' ORDER BY CREATED DESC, ID DESC');
+  $res=SQLSelect('SELECT ID,CREATED,USER_ID,THREAD_ID,DIRECTION,TYPE,MESSAGE FROM tlg_history '.$where.' ORDER BY CREATED DESC, ID DESC');
   $users_rec=SQLSelect('SELECT USER_ID, NAME FROM tlg_user');
   $users = [];
   foreach ($users_rec as $user)
@@ -48,6 +48,10 @@ if ($filter_type!='')
      // some action for every record if required
      $res[$i]['MESSAGE'] = nl2br($res[$i]['MESSAGE']);
      $res[$i]['NAME'] = $users[$res[$i]['USER_ID']];
+     // Отображаем thread_id если он есть
+     if ($res[$i]['THREAD_ID'] > 0) {
+         $res[$i]['MESSAGE'] = '[Thread: ' . $res[$i]['THREAD_ID'] . '] ' . $res[$i]['MESSAGE'];
+     }
     }
     $out['RESULT']=$res;
     $out['HISTORY_DAYS'] = $this->config['TLG_HISTORY_DAYS'] !== "" ? $this->config['TLG_HISTORY_DAYS'] : 7;
