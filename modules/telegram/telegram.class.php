@@ -84,6 +84,7 @@ class telegram extends module {
             'TLG_BOT_NAME',
             'TLG_HISTORY_ONLY_ERRORS',
             'TLG_HISTORY_DAYS',
+            'TLG_SAVE_UNICODE'
         );
 
         foreach($setConfigKeys as $k) {
@@ -290,7 +291,7 @@ class telegram extends module {
         global $setwebhook;
         if ($setwebhook)
         {
-			global $tlg_webhook_url;
+            global $tlg_webhook_url;
             $this->config['TLG_WEBHOOK_URL'] = $tlg_webhook_url;
             global $tlg_webhook_cert;
             $this->config['TLG_WEBHOOK_CERT'] = $tlg_webhook_cert;
@@ -334,6 +335,32 @@ class telegram extends module {
             echo "Ok";
             exit;
         }
+        
+        // НОВЫЙ БЛОК: Отправка сообщения в тему
+        global $sendMessageThread;
+        if ($sendMessageThread)
+        {
+            header("HTTP/1.0: 200 OK\n");
+            header('Content-Type: text/html; charset=utf-8');
+            $user=gr('user');
+            $thread=gr('thread');
+            $text=gr('text');
+            $image = gr('image');
+            $silent=gr('silent');
+            if (!isset($silent)) {
+                $silent = NULL;
+            }
+            if ($image!='' && file_exists($image)) {
+                $this->sendImageToUserThread($user, $thread, $image, $text, null, '', $silent);
+            }
+            else if ($text!='') {
+                $this->sendMessageToUserThread($user, $thread, $text, null, '', $silent);
+            }
+
+            echo "Ok";
+            exit;
+        }
+        
         $out['TLG_TOKEN'] = $this->config['TLG_TOKEN'];
         $out['TLG_STORAGE'] = $this->config['TLG_STORAGE'];
         $out['TLG_COUNT_ROW'] = $this->config['TLG_COUNT_ROW'];
@@ -468,18 +495,18 @@ class telegram extends module {
                 $this->delete_history($this->id);
                 $this->redirect("?tab=history");
             }
-			if ($this->view_mode=='export_command') {
-				$this->export_command($out, $this->id);
-			}
-			if ($this->view_mode=='import_command') {
-				$this->import_command($out);
-			}
+            if ($this->view_mode=='export_command') {
+                $this->export_command($out, $this->id);
+            }
+            if ($this->view_mode=='import_command') {
+                $this->import_command($out);
+            }
             if ($this->view_mode=='export_event') {
-				$this->export_event($out, $this->id);
-			}
-			if ($this->view_mode=='import_event') {
-				$this->import_event($out);
-			}
+                $this->export_event($out, $this->id);
+            }
+            if ($this->view_mode=='import_event') {
+                $this->import_event($out);
+            }
             if($this->view_mode == '' || $this->view_mode == 'search_ms') {
                 if($this->tab == 'cmd') {
                     $this->tlg_cmd($out);
@@ -494,15 +521,15 @@ class telegram extends module {
                 }
             }
         }
-		global $update_user_info;
-		if ($update_user_info) {
-			$this->info("Update user info");
-			$users = $this->getUsers("");
-			foreach($users as $user) {
-				$this->updateInfo($user);
-			}
-			$this->redirect("?");
-		}
+        global $update_user_info;
+        if ($update_user_info) {
+            $this->info("Update user info");
+            $users = $this->getUsers("");
+            foreach($users as $user) {
+                $this->updateInfo($user);
+            }
+            $this->redirect("?");
+        }
     }
     /**
      * Edit/add
@@ -519,7 +546,7 @@ class telegram extends module {
         require(DIR_MODULES . $this->name . '/event_edit.inc.php');
     }
 
-	/**
+    /**
      * Export/import
      *
      * @access public
@@ -801,20 +828,20 @@ class telegram extends module {
     }
 
     function editImage($user_id, $message_id, $image_path, $message = '', $keyboard = '', $parse_mode = 'HTML') {
-	$img = curl_file_create($image_path, 'image/png');
-	$photo = array(
-		'caption' => $message,
-		'type' => 'photo',
-		'parse_mode'=> $parse_mode,
-		'media' => 'attach://'.basename($image_path)
-	);
+    $img = curl_file_create($image_path, 'image/png');
+    $photo = array(
+        'caption' => $message,
+        'type' => 'photo',
+        'parse_mode'=> $parse_mode,
+        'media' => 'attach://'.basename($image_path)
+    );
         $content = array(
             'chat_id' => $user_id,
             'message_id' => $message_id,
             'media' => json_encode($photo,true),
             'reply_markup' => $keyboard,
         );
-		$content[basename($image_path)]=$img;
+        $content[basename($image_path)]=$img;
         $this->debug($content);
         $res = $this->sendContent($content,"editMessageMedia");
         return $res;
@@ -855,7 +882,14 @@ class telegram extends module {
                 'parse_mode' => $parse_mode,
                 'disable_notification' => $silent
             );
-	    if (count($flags)) foreach ($flags as $flagname => $flagvalue) $content[$flagname] = $flagvalue;
+            
+            // Поддержка message_thread_id через флаги
+            if (isset($flags['message_thread_id'])) {
+                $content['message_thread_id'] = $flags['message_thread_id'];
+                unset($flags['message_thread_id']);
+            }
+            
+            if (count($flags)) foreach ($flags as $flagname => $flagvalue) $content[$flagname] = $flagvalue;
             if ($keyboard != "")
                  $content['reply_markup'] = $keyboard;
             if ($inline != "")
@@ -864,7 +898,29 @@ class telegram extends module {
         }
         return $res;
     }
-    function sendMessageTo($where, $message, array $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
+    
+    /// НОВЫЙ МЕТОД: Отправка сообщения в тему
+    function sendMessageToThread($user_id, $thread_id, $message, $keyboard = '', $parse_mode = 'HTML', $inline = '', $silent = false, $flags=array()) {
+        $splited = str_split($message, 4096);
+        foreach ($splited as $mess) {
+            $content = array(
+                'chat_id' => $user_id,
+                'message_thread_id' => $thread_id,
+                'text' => $mess,
+                'parse_mode' => $parse_mode,
+                'disable_notification' => $silent
+            );
+            if (count($flags)) foreach ($flags as $flagname => $flagvalue) $content[$flagname] = $flagvalue;
+            if ($keyboard != "")
+                 $content['reply_markup'] = $keyboard;
+            if ($inline != "")
+                 $content['reply_markup'] = $inline;
+            $res = $this->sendContent($content,"sendMessage");
+        }
+        return $res;
+    }
+    
+    function sendMessageTo($where, $message, $thread_id = null, array $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
         $users = $this->getUsers($where);
         foreach($users as $user) {
             $user_id = $user['USER_ID'];
@@ -872,20 +928,44 @@ class telegram extends module {
             $keyboard = $this->buildKeyboard($user, $key);
             if ($silent == NULL)
                 $silent = $user['SILENT'];
-            $res = $this->sendMessage($user_id,$message, $keyboard, 'HTML', $inline, $silent, $flags);
+            
+            if ($thread_id !== null) {
+                $res = $this->sendMessageToThread($user_id, $thread_id, $message, $keyboard, 'HTML', $inline, $silent, $flags);
+            } else {
+                $res = $this->sendMessage($user_id, $message, $keyboard, 'HTML', $inline, $silent, $flags);
+            }
             $this->debug($res);
         }
         return $res;
     }
+    
     function sendMessageToUser($user_id, $message, $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
-        return $this->sendMessageTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $message, $key, $inline, $silent, $flags);
+        return $this->sendMessageTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $message, null, $key, $inline, $silent, $flags);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка сообщения в тему пользователю
+    function sendMessageToUserThread($user_id, $thread_id, $message, $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
+        return $this->sendMessageTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $message, $thread_id, $key, $inline, $silent, $flags);
+    }
+    
     function sendMessageToAdmin($message, $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
-        return $this->sendMessageTo("ADMIN=1", $message, $key, $inline, $silent, $flags);
+        return $this->sendMessageTo("ADMIN=1", $message, null, $key, $inline, $silent, $flags);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка сообщения в тему администраторам
+    function sendMessageToAdminThread($thread_id, $message, $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
+        return $this->sendMessageTo("ADMIN=1", $message, $thread_id, $key, $inline, $silent, $flags);
+    }
+    
     function sendMessageToAll($message, $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
-        return $this->sendMessageTo("", $message, $key, $inline, $silent, $flags);
+        return $this->sendMessageTo("", $message, null, $key, $inline, $silent, $flags);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка сообщения в тему всем пользователям
+    function sendMessageToAllThread($thread_id, $message, $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
+        return $this->sendMessageTo("", $message, $thread_id, $key, $inline, $silent, $flags);
+    }
+    
     ///send image
     function sendImage($user_id, $image_path, $message = '', $keyboard = '', $inline = '', $silent = false, $flags=array()) {
         $img = curl_file_create($image_path, 'image/png');
@@ -902,7 +982,26 @@ class telegram extends module {
         $res = $this->sendContent($content,"sendPhoto");
         return $res;
     }
-    function sendImageTo($where, $image_path, $message = '', array $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
+    
+    /// НОВЫЙ МЕТОД: Отправка изображения в тему
+    function sendImageToThread($user_id, $thread_id, $image_path, $message = '', $keyboard = '', $inline = '', $silent = false, $flags=array()) {
+        $img = curl_file_create($image_path, 'image/png');
+        $content = array(
+            'chat_id' => $user_id,
+            'message_thread_id' => $thread_id,
+            'photo' => $img,
+            'caption' => $message,
+            'reply_markup' => $keyboard,
+            'disable_notification' => $silent
+        );
+        if ($inline != "")
+            $content['reply_markup'] = $inline;
+        foreach ($flags as $key => $value) $content[$key] = $value;
+        $res = $this->sendContent($content,"sendPhoto");
+        return $res;
+    }
+    
+    function sendImageTo($where, $image_path, $message = '', $thread_id = null, array $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
         $img = curl_file_create($image_path, 'image/png');
         $users = $this->getUsers($where);
         foreach($users as $user) {
@@ -918,6 +1017,9 @@ class telegram extends module {
                 'reply_markup' => $keyboard,
                 'disable_notification' => $silent
             );
+            if ($thread_id !== null) {
+                $content['message_thread_id'] = $thread_id;
+            }
             if ($inline != "")
                 $content['reply_markup'] = $inline;
             foreach ($flags as $key => $value) $content[$key] = $value;
@@ -925,15 +1027,34 @@ class telegram extends module {
         }
         return $res;
     }
+    
     function sendImageToUser($user_id, $image_path, $message = '', $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
-        $this->sendImageTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $image_path, $message, $key, $inline, $silent, $flags);
+        $this->sendImageTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $image_path, $message, null, $key, $inline, $silent, $flags);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка изображения в тему пользователю
+    function sendImageToUserThread($user_id, $thread_id, $image_path, $message = '', $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
+        return $this->sendImageTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $image_path, $message, $thread_id, $key, $inline, $silent, $flags);
+    }
+    
     function sendImageToAdmin($image_path, $message = '', $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
-        $this->sendImageTo("ADMIN=1", $image_path, $message, $key, $inline, $silent, $flags);
+        $this->sendImageTo("ADMIN=1", $image_path, $message, null, $key, $inline, $silent, $flags);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка изображения в тему администраторам
+    function sendImageToAdminThread($thread_id, $image_path, $message = '', $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
+        return $this->sendImageTo("ADMIN=1", $image_path, $message, $thread_id, $key, $inline, $silent, $flags);
+    }
+    
     function sendImageToAll($image_path, $message = '', $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
-        $this->sendImageTo("", $image_path, $message, $key, $inline, $silent, $flags);
+        $this->sendImageTo("", $image_path, $message, null, $key, $inline, $silent, $flags);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка изображения в тему всем пользователям
+    function sendImageToAllThread($thread_id, $image_path, $message = '', $key = NULL, $inline = '', $silent = NULL, $flags=array()) {
+        return $this->sendImageTo("", $image_path, $message, $thread_id, $key, $inline, $silent, $flags);
+    }
+    
     ///send video
     function sendVideo($user_id, $video_path, $message = '', $keyboard = '', $inline = '') {
         $video = curl_file_create($video_path);
@@ -948,7 +1069,8 @@ class telegram extends module {
         $res = $this->sendContent($content,"sendVideo");
         return $res;
     }
-    function sendVideoTo($where, $video_path, $message = '', array $key = NULL, $inline = '') {
+    
+    function sendVideoTo($where, $video_path, $message = '', $thread_id = null, array $key = NULL, $inline = '') {
         $video = curl_file_create($video_path);
         $users = $this->getUsers($where);
         foreach($users as $user) {
@@ -961,21 +1083,43 @@ class telegram extends module {
                 'caption' => $message,
                 'reply_markup' => $keyboard
             );
+            if ($thread_id !== null) {
+                $content['message_thread_id'] = $thread_id;
+            }
             if ($inline != "")
                 $content['reply_markup'] = $inline;
             $res = $this->sendContent($content,"sendVideo");
         }
         return $res;
     }
+    
     function sendVideoToUser($user_id, $video_path, $message = '', $key = NULL, $inline = '') {
-        $this->sendVideoTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $video_path, $message, $key, $inline);
+        $this->sendVideoTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $video_path, $message, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка видео в тему пользователю
+    function sendVideoToUserThread($user_id, $thread_id, $video_path, $message = '', $key = NULL, $inline = '') {
+        return $this->sendVideoTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $video_path, $message, $thread_id, $key, $inline);
+    }
+    
     function sendVideoToAdmin($video_path, $message = '', $key = NULL, $inline = '') {
-        $this->sendVideoTo("ADMIN=1", $video_path, $message, $key, $inline);
+        $this->sendVideoTo("ADMIN=1", $video_path, $message, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка видео в тему администраторам
+    function sendVideoToAdminThread($thread_id, $video_path, $message = '', $key = NULL, $inline = '') {
+        return $this->sendVideoTo("ADMIN=1", $video_path, $message, $thread_id, $key, $inline);
+    }
+    
     function sendVideoToAll($video_path, $message = '', $key = NULL, $inline = '') {
-        $this->sendVideoTo("", $video_path, $message, $key, $inline);
+        $this->sendVideoTo("", $video_path, $message, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка видео в тему всем пользователям
+    function sendVideoToAllThread($thread_id, $video_path, $message = '', $key = NULL, $inline = '') {
+        return $this->sendVideoTo("", $video_path, $message, $thread_id, $key, $inline);
+    }
+    
     ///send album
     function sendAlbum($user_id, $image_paths, $message = '', $keyboard = '') {
         if (count($image_paths) == 1)
@@ -1001,7 +1145,35 @@ class telegram extends module {
         $res = $this->sendContent($content,"sendMediaGroup");
         return $res;
     }
-    function sendAlbumTo($where, $image_paths, $message = '', array $key = NULL) {
+    
+    /// НОВЫЙ МЕТОД: Отправка альбома в тему
+    function sendAlbumToThread($user_id, $thread_id, $image_paths, $message = '', $keyboard = '') {
+        if (count($image_paths) == 1)
+        {
+            $this->sendImageToThread($user_id, $thread_id, $image_paths[0], $message, $keyboard);
+            return;
+        }
+        $photos = array();
+        $content = array(
+            'chat_id' => $user_id,
+            'message_thread_id' => $thread_id
+        );
+        foreach($image_paths as $image) {
+            $img = curl_file_create($image, 'image/png');
+            $photo = array();
+            $photo['caption'] = $message;
+            $photo['type'] = 'photo';
+            $photo['parse_mode'] = 'HTML';
+            $photo['media'] = 'attach://'.basename($image);
+            $photos[]=$photo;
+            $content[basename($image)]=$img;
+        }
+        $content['media'] = json_encode($photos,true);
+        $res = $this->sendContent($content,"sendMediaGroup");
+        return $res;
+    }
+    
+    function sendAlbumTo($where, $image_paths, $message = '', $thread_id = null, array $key = NULL) {
         $photos = array();
         $content = array();
         foreach($image_paths as $image) {
@@ -1019,19 +1191,41 @@ class telegram extends module {
         foreach($users as $user) {
             $user_id = $user['USER_ID'];
             $content['chat_id'] = $user_id;
+            if ($thread_id !== null) {
+                $content['message_thread_id'] = $thread_id;
+            }
             $res = $this->sendContent($content,"sendMediaGroup");
         }
         return $res;
     }
+    
     function sendAlbumToUser($user_id, $image_paths, $message = '', $key = NULL) {
-        $this->sendAlbumTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $image_paths, $message, $key);
+        $this->sendAlbumTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $image_paths, $message, null, $key);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка альбома в тему пользователю
+    function sendAlbumToUserThread($user_id, $thread_id, $image_paths, $message = '', $key = NULL) {
+        return $this->sendAlbumTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $image_paths, $message, $thread_id, $key);
+    }
+    
     function sendAlbumToAdmin($image_paths, $message = '', $key = NULL) {
-        $this->sendAlbumTo("ADMIN=1", $image_paths, $message, $key);
+        $this->sendAlbumTo("ADMIN=1", $image_paths, $message, null, $key);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка альбома в тему администраторам
+    function sendAlbumToAdminThread($thread_id, $image_paths, $message = '', $key = NULL) {
+        return $this->sendAlbumTo("ADMIN=1", $image_paths, $message, $thread_id, $key);
+    }
+    
     function sendAlbumToAll($image_paths, $message = '', $key = NULL) {
-        $this->sendAlbumTo("", $image_paths, $message, $key);
+        $this->sendAlbumTo("", $image_paths, $message, null, $key);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка альбома в тему всем пользователям
+    function sendAlbumToAllThread($thread_id, $image_paths, $message = '', $key = NULL) {
+        return $this->sendAlbumTo("", $image_paths, $message, $thread_id, $key);
+    }
+    
     //
     function sendFile($user_id, $file_path, $message = '', $keyboard = '', $inline='') {
         $file = curl_file_create($file_path);
@@ -1044,7 +1238,24 @@ class telegram extends module {
         $res = $this->sendContent($content,"sendDocument");
         return $res;
     }
-    function sendFileTo($where, $file_path, $message = '', array $key = NULL, $inline='') {
+    
+    /// НОВЫЙ МЕТОД: Отправка файла в тему
+    function sendFileToThread($user_id, $thread_id, $file_path, $message = '', $keyboard = '', $inline='') {
+        $file = curl_file_create($file_path);
+        $content = array(
+            'chat_id' => $user_id,
+            'message_thread_id' => $thread_id,
+            'document' => $file,
+            'caption' => $message,
+            'reply_markup' => $keyboard
+        );
+        if ($inline != "")
+            $content['reply_markup'] = $inline;
+        $res = $this->sendContent($content,"sendDocument");
+        return $res;
+    }
+    
+    function sendFileTo($where, $file_path, $message = '', $thread_id = null, array $key = NULL, $inline='') {
         $file = curl_file_create($file_path);
         $users = $this->getUsers($where);
         foreach($users as $user) {
@@ -1057,21 +1268,43 @@ class telegram extends module {
                 'caption' => $message,
                 'reply_markup' => $keyboard
             );
+            if ($thread_id !== null) {
+                $content['message_thread_id'] = $thread_id;
+            }
             if ($inline != "")
                 $content['reply_markup'] = $inline;
             $res = $this->sendContent($content,"sendDocument");
         }
         return $res;
     }
+    
     function sendFileToUser($user_id, $file_path, $message = '', $key = NULL, $inline='') {
-        $this->sendFileTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $file_path, $message, $key, $inline);
+        $this->sendFileTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $file_path, $message, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка файла в тему пользователю
+    function sendFileToUserThread($user_id, $thread_id, $file_path, $message = '', $key = NULL, $inline='') {
+        return $this->sendFileTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $file_path, $message, $thread_id, $key, $inline);
+    }
+    
     function sendFileToAdmin($file_path, $message = '', $key = NULL, $inline='') {
-        $this->sendFileTo("ADMIN=1", $file_path, $message, $key, $inline);
+        $this->sendFileTo("ADMIN=1", $file_path, $message, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка файла в тему администраторам
+    function sendFileToAdminThread($thread_id, $file_path, $message = '', $key = NULL, $inline='') {
+        return $this->sendFileTo("ADMIN=1", $file_path, $message, $thread_id, $key, $inline);
+    }
+    
     function sendFileToAll($file_path, $message = '', $key = NULL, $inline='') {
-        $this->sendFileTo("", $file_path, $message, $key, $inline);
+        $this->sendFileTo("", $file_path, $message, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка файла в тему всем пользователям
+    function sendFileToAllThread($thread_id, $file_path, $message = '', $key = NULL, $inline='') {
+        return $this->sendFileTo("", $file_path, $message, $thread_id, $key, $inline);
+    }
+    
     function sendSticker($user_id, $sticker, $keyboard = '', $inline='') {
         $content = array(
             'chat_id' => $user_id,
@@ -1083,7 +1316,22 @@ class telegram extends module {
         $res = $this->sendContent($content,"sendSticker");
         return $res;
     }
-    function sendStickerTo($where, $sticker, array $key = NULL, $inline='') {
+    
+    /// НОВЫЙ МЕТОД: Отправка стикера в тему
+    function sendStickerToThread($user_id, $thread_id, $sticker, $keyboard = '', $inline='') {
+        $content = array(
+            'chat_id' => $user_id,
+            'message_thread_id' => $thread_id,
+            'sticker' => $sticker,
+            'reply_markup' => $keyboard
+        );
+        if ($inline != "")
+            $content['reply_markup'] = $inline;
+        $res = $this->sendContent($content,"sendSticker");
+        return $res;
+    }
+    
+    function sendStickerTo($where, $sticker, $thread_id = null, array $key = NULL, $inline='') {
         $users = $this->getUsers($where);
         foreach($users as $user) {
             $user_id = $user['USER_ID'];
@@ -1094,21 +1342,43 @@ class telegram extends module {
                 'sticker' => $sticker,
                 'reply_markup' => $keyboard
             );
+            if ($thread_id !== null) {
+                $content['message_thread_id'] = $thread_id;
+            }
             if ($inline != "")
                 $content['reply_markup'] = $inline;
             $res = $this->sendContent($content,"sendSticker");
         }
         return $res;
     }
+    
     function sendStickerToUser($user_id, $sticker, $key = NULL, $inline='') {
-        $this->sendStickerTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $sticker, $key, $inline);
+        $this->sendStickerTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $sticker, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка стикера в тему пользователю
+    function sendStickerToUserThread($user_id, $thread_id, $sticker, $key = NULL, $inline='') {
+        return $this->sendStickerTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $sticker, $thread_id, $key, $inline);
+    }
+    
     function sendStickerToAdmin($sticker, $key = NULL, $inline='') {
-        $this->sendStickerTo("ADMIN=1", $sticker, $key, $inline);
+        $this->sendStickerTo("ADMIN=1", $sticker, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка стикера в тему администраторам
+    function sendStickerToAdminThread($thread_id, $sticker, $key = NULL, $inline='') {
+        return $this->sendStickerTo("ADMIN=1", $sticker, $thread_id, $key, $inline);
+    }
+    
     function sendStickerToAll($sticker, $key = NULL, $inline='') {
-        $this->sendStickerTo("", $sticker, $key, $inline);
+        $this->sendStickerTo("", $sticker, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка стикера в тему всем пользователям
+    function sendStickerToAllThread($thread_id, $sticker, $key = NULL, $inline='') {
+        return $this->sendStickerTo("", $sticker, $thread_id, $key, $inline);
+    }
+    
     function sendLocation($user_id, $lat, $lon, $keyboard = '', $inline='') {
         $content = array(
             'chat_id' => $user_id,
@@ -1121,7 +1391,23 @@ class telegram extends module {
         $res = $this->sendContent($content,"sendLocation");
         return $res;
     }
-    function sendLocationTo($where, $lat, $lon, array $key = NULL, $inline='') {
+    
+    /// НОВЫЙ МЕТОД: Отправка местоположения в тему
+    function sendLocationToThread($user_id, $thread_id, $lat, $lon, $keyboard = '', $inline='') {
+        $content = array(
+            'chat_id' => $user_id,
+            'message_thread_id' => $thread_id,
+            'latitude' => $lat,
+            'longitude' => $lon,
+            'reply_markup' => $keyboard
+        );
+        if ($inline != "")
+            $content['reply_markup'] = $inline;
+        $res = $this->sendContent($content,"sendLocation");
+        return $res;
+    }
+    
+    function sendLocationTo($where, $lat, $lon, $thread_id = null, array $key = NULL, $inline='') {
         $users = $this->getUsers($where);
         foreach($users as $user) {
             $user_id = $user['USER_ID'];
@@ -1133,21 +1419,43 @@ class telegram extends module {
                 'longitude' => $lon,
                 'reply_markup' => $keyboard
             );
+            if ($thread_id !== null) {
+                $content['message_thread_id'] = $thread_id;
+            }
             if ($inline != "")
                 $content['reply_markup'] = $inline;
             $res = $this->sendContent($content,"sendLocation");
         }
         return $res;
     }
+    
     function sendLocationToUser($user_id, $lat, $lon, $key = NULL, $inline='') {
-        return $this->sendLocationTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $lat, $lon, $key, $inline);
+        return $this->sendLocationTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $lat, $lon, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка местоположения в тему пользователю
+    function sendLocationToUserThread($user_id, $thread_id, $lat, $lon, $key = NULL, $inline='') {
+        return $this->sendLocationTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $lat, $lon, $thread_id, $key, $inline);
+    }
+    
     function sendLocationToAdmin($lat, $lon, $key = NULL, $inline='') {
-        return $this->sendLocationTo("ADMIN=1", $lat, $lon, $key, $inline);
+        return $this->sendLocationTo("ADMIN=1", $lat, $lon, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка местоположения в тему администраторам
+    function sendLocationToAdminThread($thread_id, $lat, $lon, $key = NULL, $inline='') {
+        return $this->sendLocationTo("ADMIN=1", $lat, $lon, $thread_id, $key, $inline);
+    }
+    
     function sendLocationToAll($lat, $lon, $key = NULL, $inline='') {
-        return $this->sendLocationTo("", $lat, $lon, $key, $inline);
+        return $this->sendLocationTo("", $lat, $lon, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка местоположения в тему всем пользователям
+    function sendLocationToAllThread($thread_id, $lat, $lon, $key = NULL, $inline='') {
+        return $this->sendLocationTo("", $lat, $lon, $thread_id, $key, $inline);
+    }
+    
     function sendVenue($user_id, $lat, $lon, $title, $address, $keyboard = '', $inline='') {
         $content = array(
             'chat_id' => $user_id,
@@ -1162,7 +1470,25 @@ class telegram extends module {
         $res = $this->sendContent($content,"sendVenue");
         return $res;
     }
-    function sendVenueTo($where, $lat, $lon, $title, $address, array $key = NULL, $inline='') {
+    
+    /// НОВЫЙ МЕТОД: Отправка места в тему
+    function sendVenueToThread($user_id, $thread_id, $lat, $lon, $title, $address, $keyboard = '', $inline='') {
+        $content = array(
+            'chat_id' => $user_id,
+            'message_thread_id' => $thread_id,
+            'latitude' => $lat,
+            'longitude' => $lon,
+            'title' => $title,
+            'address' => $address,
+            'reply_markup' => $keyboard
+        );
+        if ($inline != "")
+            $content['reply_markup'] = $inline;
+        $res = $this->sendContent($content,"sendVenue");
+        return $res;
+    }
+    
+    function sendVenueTo($where, $lat, $lon, $title, $address, $thread_id = null, array $key = NULL, $inline='') {
         $users = $this->getUsers($where);
         foreach($users as $user) {
             $user_id = $user['USER_ID'];
@@ -1176,67 +1502,138 @@ class telegram extends module {
                 'address' => $address,
                 'reply_markup' => $keyboard
             );
+            if ($thread_id !== null) {
+                $content['message_thread_id'] = $thread_id;
+            }
             if ($inline != "")
                 $content['reply_markup'] = $inline;
             $res = $this->sendContent($content,"sendVenue");
         }
         return $res;
     }
+    
     function sendVenueToUser($user_id, $lat, $lon, $title, $address, $key = NULL, $inline='') {
-        return $this->sendVenueTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $lat, $lon, $title, $address, $key, $inline);
+        return $this->sendVenueTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $lat, $lon, $title, $address, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка места в тему пользователю
+    function sendVenueToUserThread($user_id, $thread_id, $lat, $lon, $title, $address, $key = NULL, $inline='') {
+        return $this->sendVenueTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $lat, $lon, $title, $address, $thread_id, $key, $inline);
+    }
+    
     function sendVenueToAdmin($lat, $lon, $title, $address, $key = NULL, $inline='') {
-        return $this->sendVenueTo("ADMIN=1", $lat, $lon, $title, $address, $key, $inline);
+        return $this->sendVenueTo("ADMIN=1", $lat, $lon, $title, $address, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка места в тему администраторам
+    function sendVenueToAdminThread($thread_id, $lat, $lon, $title, $address, $key = NULL, $inline='') {
+        return $this->sendVenueTo("ADMIN=1", $lat, $lon, $title, $address, $thread_id, $key, $inline);
+    }
+    
     function sendVenueToAll($lat, $lon, $title, $address, $key = NULL, $inline='') {
-        return $this->sendVenueTo("", $lat, $lon, $title, $address, $key, $inline);
+        return $this->sendVenueTo("", $lat, $lon, $title, $address, null, $key, $inline);
+    }
+    
+    /// НОВЫЙ МЕТОД: Отправка места в тему всем пользователям
+    function sendVenueToAllThread($thread_id, $lat, $lon, $title, $address, $key = NULL, $inline='') {
+        return $this->sendVenueTo("", $lat, $lon, $title, $address, $thread_id, $key, $inline);
     }
 
     function sendVoice($user_id, $file_path, $caption='', $keyboard = '', $inline='') {
         $file = curl_file_create($file_path);
-		$content = array(
-			'chat_id' => $user_id,
-			'voice' => $file,
-			'caption' => $caption,
-			'reply_markup' => $keyboard
-		);
+        $content = array(
+            'chat_id' => $user_id,
+            'voice' => $file,
+            'caption' => $caption,
+            'reply_markup' => $keyboard
+        );
         if ($inline != "")
             $content['reply_markup'] = $inline;
-		$res = $this->sendContent($content, "sendVoice");
-		return $res;
+        $res = $this->sendContent($content, "sendVoice");
+        return $res;
     }
-    function sendVoiceTo($where, $file_path, $caption='', array $key = NULL, $inline='') {
+    
+    /// НОВЫЙ МЕТОД: Отправка голосового сообщения в тему
+    function sendVoiceToThread($user_id, $thread_id, $file_path, $caption='', $keyboard = '', $inline='') {
         $file = curl_file_create($file_path);
-		$users = $this->getUsers($where);
+        $content = array(
+            'chat_id' => $user_id,
+            'message_thread_id' => $thread_id,
+            'voice' => $file,
+            'caption' => $caption,
+            'reply_markup' => $keyboard
+        );
+        if ($inline != "")
+            $content['reply_markup'] = $inline;
+        $res = $this->sendContent($content, "sendVoice");
+        return $res;
+    }
+    
+    function sendVoiceTo($where, $file_path, $caption='', $thread_id = null, array $key = NULL, $inline='') {
+        $file = curl_file_create($file_path);
+        $users = $this->getUsers($where);
         foreach($users as $user) {
             $user_id = $user['USER_ID'];
             if ($user_id === '0') $user_id = $user['NAME'];
-			$keyboard = $this->buildKeyboard($user, $key);
+            $keyboard = $this->buildKeyboard($user, $key);
             $content = array(
-				'chat_id' => $user_id,
-				'voice' => $file,
-				'caption' => $caption,
-				'reply_markup' => $keyboard
-			);
+                'chat_id' => $user_id,
+                'voice' => $file,
+                'caption' => $caption,
+                'reply_markup' => $keyboard
+            );
+            if ($thread_id !== null) {
+                $content['message_thread_id'] = $thread_id;
+            }
             if ($inline != "")
                 $content['reply_markup'] = $inline;
-			$res = $this->sendContent($content,"sendVoice");
-		}
+            $res = $this->sendContent($content,"sendVoice");
+        }
         return $res;
     }
-	function sendVoiceToUser($user_id, $file_path, $caption='', $key = NULL, $inline='') {
-        return $this->sendVoiceTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $file_path, $caption, $key, $inline);
+    
+    function sendVoiceToUser($user_id, $file_path, $caption='', $key = NULL, $inline='') {
+        return $this->sendVoiceTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $file_path, $caption, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка голосового сообщения в тему пользователю
+    function sendVoiceToUserThread($user_id, $thread_id, $file_path, $caption='', $key = NULL, $inline='') {
+        return $this->sendVoiceTo('(USER_ID="' . DBSafe($user_id) . '" OR NAME LIKE "' . DBSafe($user_id) .  '")', $file_path, $caption, $thread_id, $key, $inline);
+    }
+    
     function sendVoiceToAdmin($file_path, $caption='', $key = NULL, $inline='') {
-        return $this->sendVoiceTo("ADMIN=1", $file_path, $caption, $key, $inline);
+        return $this->sendVoiceTo("ADMIN=1", $file_path, $caption, null, $key, $inline);
     }
+    
+    /// НОВЫЙ МЕТОД: Отправка голосового сообщения в тему администраторам
+    function sendVoiceToAdminThread($thread_id, $file_path, $caption='', $key = NULL, $inline='') {
+        return $this->sendVoiceTo("ADMIN=1", $file_path, $caption, $thread_id, $key, $inline);
+    }
+    
     function sendVoiceToAll($file_path, $caption='', $key = NULL, $inline='') {
-        return $this->sendVoiceTo("", $file_path, $caption, $key, $inline);
+        return $this->sendVoiceTo("", $file_path, $caption, null, $key, $inline);
+    }
+    
+    /// НОВЫЙ МЕТОД: Отправка голосового сообщения в тему всем пользователям
+    function sendVoiceToAllThread($thread_id, $file_path, $caption='', $key = NULL, $inline='') {
+        return $this->sendVoiceTo("", $file_path, $caption, $thread_id, $key, $inline);
     }
 
     function sendDice($user_id, $emoji=null) {
         $content = array(
             'chat_id' => $user_id
+        );
+        if ($emoji!=null)
+            $content["emoji"]=$emoji;
+        $res = $this->sendContent($content, "sendDice");
+        return $res;
+    }
+    
+    /// НОВЫЙ МЕТОД: Отправка кубика в тему
+    function sendDiceToThread($user_id, $thread_id, $emoji=null) {
+        $content = array(
+            'chat_id' => $user_id,
+            'message_thread_id' => $thread_id
         );
         if ($emoji!=null)
             $content["emoji"]=$emoji;
@@ -1768,16 +2165,16 @@ class telegram extends module {
             }
     }
 
-	function execCommand($chat_id, $command)
-	{
-		$user = SQLSelectOne("SELECT * FROM tlg_user WHERE USER_ID LIKE '" . DBSafe($chat_id) . "';");
-		$cmd = SQLSelectOne("SELECT * FROM tlg_cmd INNER JOIN tlg_user_cmd on tlg_cmd.ID=tlg_user_cmd.CMD_ID where (ACCESS=3  OR (tlg_user_cmd.USER_ID=" . $user['ID'] . " and ACCESS>0)) and '" . DBSafe($command) . "' LIKE CONCAT(TITLE,'%');");
+    function execCommand($chat_id, $command)
+    {
+        $user = SQLSelectOne("SELECT * FROM tlg_user WHERE USER_ID LIKE '" . DBSafe($chat_id) . "';");
+        $cmd = SQLSelectOne("SELECT * FROM tlg_cmd INNER JOIN tlg_user_cmd on tlg_cmd.ID=tlg_user_cmd.CMD_ID where (ACCESS=3  OR (tlg_user_cmd.USER_ID=" . $user['ID'] . " and ACCESS>0)) and '" . DBSafe($command) . "' LIKE CONCAT(TITLE,'%');");
         if($cmd['ID']) {
-			$this->info("execCommand => Find command");
+            $this->info("execCommand => Find command");
             if($cmd['CODE']) {
                 $this->info("execCommand => Execute user`s code command");
                 try {
-					$text = $command;
+                    $text = $command;
                     $success = eval($cmd['CODE']);
                     $this->info("Command:" . $text . " Result:" . $success);
                     if($success == false) {
@@ -1795,9 +2192,9 @@ class telegram extends module {
                 catch(Exception $e) {
                     registerError('telegram', sprintf('Exception in "%s" method: %s' . $e->getMessage(), $text));
                 }
-			}
+            }
         }
-	}
+    }
     
     function resendData(){
          $res = SQLSelect("SELECT * FROM tlg_history WHERE DIRECTION=2");
@@ -1838,6 +2235,7 @@ class telegram extends module {
         $rec=array();
         $rec["DIRECTION"] = $direction;
         $rec["USER_ID"] = 0;
+        $rec["THREAD_ID"] = 0; // Добавляем поле для thread_id
         $rec["CREATED"] = date("Y-m-d H:i:s");
         $rec["TYPE"] = 0;
             
@@ -1853,6 +2251,12 @@ class telegram extends module {
             }
             
             $rec["USER_ID"] = $message['chat']['id'];
+            
+            // Сохраняем thread_id если есть
+            if (isset($message['message_thread_id'])) {
+                $rec["THREAD_ID"] = $message['message_thread_id'];
+            }
+            
             if (isset($message['text'])){
                 $rec["TYPE"] = 1;
                 $rec["MESSAGE"] = $message['text'];
@@ -1886,6 +2290,10 @@ class telegram extends module {
         }
         if (isset($data['content'])){
             $rec["USER_ID"] = $data['content']['chat_id'];
+            // Сохраняем thread_id для исходящих сообщений
+            if (isset($data['content']['message_thread_id'])) {
+                $rec["THREAD_ID"] = $data['content']['message_thread_id'];
+            }
         }
         if (isset($data['error_code'])){
             $rec["MESSAGE"] = 'Error: '.$data['error_code'].' - '.$data['description'];
@@ -1919,6 +2327,7 @@ class telegram extends module {
             return mb_chr(((($bytes[1] & 0x07) << 18) | (($bytes[2] & 0x3F) << 12) | (($bytes[3] & 0x3F) << 6) | ($bytes[4] & 0x3F)));
         }, $string);
     }
+    
     /**
      * FrontEnd
      *
@@ -1944,6 +2353,7 @@ class telegram extends module {
         }
         $this->admin($out);
     }
+    
     function processSubscription($event, &$details) {
         $this->getConfig();
         $this->debug("event=" . $event. " details=".json_encode($details));
@@ -1957,6 +2367,10 @@ class telegram extends module {
             } elseif(isset($details['source'])) {
                 $destination = $details['source'];
             }
+            
+            // Проверяем наличие thread_id в деталях
+            $thread_id = isset($details['thread_id']) ? $details['thread_id'] : null;
+            
             $users = SQLSelect("SELECT * FROM tlg_user WHERE HISTORY=1;");
             $c_users = count($users);
             if($c_users) {
@@ -1973,7 +2387,14 @@ class telegram extends module {
                             $silent = false;
                         else
                             $silent = true;
-                        $url=BASE_URL."/ajax/telegram.html?sendMessage=1&user=".$user_id."&text=".urlencode($reply)."&image=".urlencode($image)."&silent=".$silent;
+                        
+                        // Формируем URL в зависимости от наличия thread_id
+                        if ($thread_id !== null) {
+                            $url = BASE_URL."/ajax/telegram.html?sendMessageThread=1&user=".$user_id."&thread=".$thread_id."&text=".urlencode($reply)."&image=".urlencode($image)."&silent=".$silent;
+                        } else {
+                            $url = BASE_URL."/ajax/telegram.html?sendMessage=1&user=".$user_id."&text=".urlencode($reply)."&image=".urlencode($image)."&silent=".$silent;
+                        }
+                        
                         getURLBackground($url,0);
                     }
                 }
@@ -2080,6 +2501,7 @@ class telegram extends module {
  
  tlg_history: ID int(10) unsigned NOT NULL auto_increment
  tlg_history: USER_ID varchar(25) NOT NULL DEFAULT '0'
+ tlg_history: THREAD_ID int(10) unsigned NOT NULL DEFAULT '0'
  tlg_history: CREATED datetime
  tlg_history: DIRECTION int(3) unsigned NOT NULL DEFAULT '1'
  tlg_history: TYPE int(3) unsigned NOT NULL DEFAULT '1'
@@ -2097,6 +2519,32 @@ EOD;
             SQLInsert('tlg_cmd', $rec);
         }
     }
+    
+    /**
+     * Примеры использования новых методов для работы с темами (threads):
+     * 
+     * 1. Отправка сообщения в тему пользователю:
+     *    $telegram->sendMessageToUserThread($user_id, $thread_id, $message);
+     * 
+     * 2. Отправка сообщения в тему всем пользователям:
+     *    $telegram->sendMessageToAllThread($thread_id, $message);
+     * 
+     * 3. Отправка сообщения в тему администраторам:
+     *    $telegram->sendMessageToAdminThread($thread_id, $message);
+     * 
+     * 4. Отправка изображения в тему:
+     *    $telegram->sendImageToUserThread($user_id, $thread_id, $image_path, $caption);
+     * 
+     * 5. Отправка файла в тему:
+     *    $telegram->sendFileToUserThread($user_id, $thread_id, $file_path, $caption);
+     * 
+     * 6. Редактирование сообщения в теме:
+     *    $telegram->editMessageThread($user_id, $thread_id, $message_id, $new_message);
+     * 
+     * 7. Использование через SAY с thread_id:
+     *    say('Сообщение', 2, 0, '', array('thread_id' => 5));
+     */
+    
     // --------------------------------------------------------------------
 }
 ?>
